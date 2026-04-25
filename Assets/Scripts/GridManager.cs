@@ -24,7 +24,6 @@ public class GridManager : MonoBehaviour
     private float currentTime;
     private bool gameActive = true;
 
-    // ❤️ Heartbeat variables
     private Vector3 originalScale;
     public float pulseSpeed = 4f;
     public float pulseAmount = 0.15f;
@@ -43,7 +42,6 @@ public class GridManager : MonoBehaviour
         Time.timeScale = 1f;
         currentTime = timeLimit;
 
-        // պահում ենք սկզբնական չափը
         if (timerText != null)
             originalScale = timerText.transform.localScale;
     }
@@ -63,10 +61,8 @@ public class GridManager : MonoBehaviour
 
             timerText.text = string.Format("{0}:{1:00}", minutes, seconds);
 
-            // գույն
             timerText.color = currentTime <= 10f ? Color.red : Color.white;
 
-            // ❤️ Heartbeat effect
             if (currentTime <= 10f)
             {
                 float pulse = 1 + Mathf.Sin(Time.time * pulseSpeed) * pulseAmount;
@@ -124,6 +120,8 @@ public class GridManager : MonoBehaviour
     {
         yield return new WaitForSeconds(0.3f);
 
+        if (AudioManager.Instance != null) AudioManager.Instance.PlayWin();
+
         if (timerText != null) timerText.gameObject.SetActive(false);
         if (winPanel != null) winPanel.SetActive(true);
 
@@ -136,6 +134,8 @@ public class GridManager : MonoBehaviour
     IEnumerator ShowLose()
     {
         yield return new WaitForSeconds(0.3f);
+
+        if (AudioManager.Instance != null) AudioManager.Instance.PlayLose();
 
         if (timerText != null) timerText.gameObject.SetActive(false);
         if (losePanel != null) losePanel.SetActive(true);
