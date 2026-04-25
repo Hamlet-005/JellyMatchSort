@@ -5,7 +5,7 @@ public class CameraResponsive : MonoBehaviour
     public GridManager grid;
 
     [Header("Zoom Settings")]
-    public float padding = -1f;   // որքան մոտ լինի camera-ն
+    public float padding = -1f;  
 
     void Start()
     {
@@ -29,7 +29,7 @@ public class CameraResponsive : MonoBehaviour
 
         float size;
 
-        // ընտրում ենք ճիշտ fit (width vs height)
+        
         if (aspect >= 1f)
         {
             // wide screen
@@ -41,13 +41,12 @@ public class CameraResponsive : MonoBehaviour
             size = (gridWidth / aspect) / 2f;
         }
 
-        // 🎯 camera zoom (մոտիկացում)
+        
         cam.orthographicSize = Mathf.Max(1f, size + padding);
     }
 
     void Update()
     {
-        // եթե ուզում ես runtime resize support
         if (Input.GetKeyDown(KeyCode.R))
         {
             AdjustCamera();

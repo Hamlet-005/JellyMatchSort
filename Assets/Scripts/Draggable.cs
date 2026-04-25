@@ -1,5 +1,6 @@
 using UnityEngine;
 using System.Collections.Generic;
+using DG.Tweening;
 
 [RequireComponent(typeof(BoxCollider))]
 public class Draggable : MonoBehaviour
@@ -18,6 +19,7 @@ public class Draggable : MonoBehaviour
     private bool isDragging = false;
     private Camera mainCamera;
     private List<GameObject> activeShadows = new List<GameObject>();
+    private int activeTouchId = -1;
 
     void Start()
     {
@@ -64,41 +66,49 @@ public class Draggable : MonoBehaviour
 
     void Update()
     {
-        if (Input.GetMouseButtonDown(0)) HandleSelection();
-        if (Input.GetMouseButton(0) && isDragging) HandleDragging();
-        if (Input.GetMouseButtonUp(0) && isDragging) HandleRelease();
-
-        if (Input.touchCount > 0)
-        {
-            Touch touch = Input.GetTouch(0);
-            if (touch.phase == TouchPhase.Began) HandleSelectionTouch(touch.position);
-            else if (touch.phase == TouchPhase.Moved && isDragging) HandleDraggingTouch(touch.position);
-            else if ((touch.phase == TouchPhase.Ended ||
-                      touch.phase == TouchPhase.Canceled) && isDragging) HandleRelease();
-        }
+#if UNITY_EDITOR || UNITY_STANDALONE
+        HandleMouseInput();
+#else
+        HandleTouchInput();
+#endif
     }
 
-    void HandleSelection()
+    void HandleMouseInput()
     {
-        Ray ray = mainCamera.ScreenPointToRay(Input.mousePosition);
-        if (Physics.Raycast(ray, out RaycastHit hit, 100f))
+        if (Input.GetMouseButtonDown(0)) TrySelect(Input.mousePosition);
+        if (Input.GetMouseButton(0) && isDragging) DragTo(Input.mousePosition);
+        if (Input.GetMouseButtonUp(0) && isDragging) HandleRelease();
+    }
+
+    void HandleTouchInput()
+    {
+        foreach (Touch touch in Input.touches)
         {
-            if (hit.transform == transform || hit.transform.IsChildOf(transform))
+            if (touch.phase == TouchPhase.Began && activeTouchId == -1)
             {
-                StartDrag();
+                TrySelect(touch.position);
+                if (isDragging) activeTouchId = touch.fingerId;
+            }
+            else if (touch.fingerId == activeTouchId)
+            {
+                if (touch.phase == TouchPhase.Moved || touch.phase == TouchPhase.Stationary)
+                    DragTo(touch.position);
+                else if (touch.phase == TouchPhase.Ended || touch.phase == TouchPhase.Canceled)
+                {
+                    HandleRelease();
+                    activeTouchId = -1;
+                }
             }
         }
     }
 
-    void HandleSelectionTouch(Vector2 screenPos)
+    void TrySelect(Vector3 screenPos)
     {
         Ray ray = mainCamera.ScreenPointToRay(screenPos);
         if (Physics.Raycast(ray, out RaycastHit hit, 100f))
         {
             if (hit.transform == transform || hit.transform.IsChildOf(transform))
-            {
                 StartDrag();
-            }
         }
     }
 
@@ -108,19 +118,15 @@ public class Draggable : MonoBehaviour
         FreePreviousSlots();
         CreateShadows();
         SetShapeTransparency(dragTransparency);
+
+        if (AudioManager.Instance != null)
+            AudioManager.Instance.PlayPickUp();
+
+        transform.DOKill();
+        transform.DOScale(Vector3.one * 1.15f, 0.15f).SetEase(Ease.OutBack);
     }
 
-    void HandleDragging()
-    {
-        MoveToScreenPos(Input.mousePosition);
-    }
-
-    void HandleDraggingTouch(Vector2 screenPos)
-    {
-        MoveToScreenPos(screenPos);
-    }
-
-    void MoveToScreenPos(Vector2 screenPos)
+    void DragTo(Vector3 screenPos)
     {
         Plane movePlane = new Plane(Vector3.up, new Vector3(0, 0.5f, 0));
         Ray ray = mainCamera.ScreenPointToRay(screenPos);
@@ -128,7 +134,7 @@ public class Draggable : MonoBehaviour
         if (movePlane.Raycast(ray, out float distance))
         {
             Vector3 hitPoint = ray.GetPoint(distance);
-            transform.position = new Vector3(hitPoint.x, 1.0f, hitPoint.z);
+            transform.position = new Vector3(hitPoint.x, 0.5f, hitPoint.z);
         }
         UpdateShadows();
     }
@@ -138,43 +144,11 @@ public class Draggable : MonoBehaviour
         isDragging = false;
         DestroyShadows();
         SetShapeTransparency(1.0f);
-        ToggleRealShadows(true);
+
+        transform.DOKill();
+        transform.DOScale(Vector3.one, 0.15f).SetEase(Ease.OutBack);
+
         HandleDrop();
-    }
-
-    void UpdateShadows()
-    {
-        List<GridSlot> previewSlots = new List<GridSlot>();
-        bool allValid = true;
-
-        for (int i = 0; i < jellyParts.Length; i++)
-        {
-            GridSlot slot = FindClosestSlot(jellyParts[i].position);
-            if (slot == null || slot.isOccupied || previewSlots.Contains(slot))
-                allValid = false;
-            if (slot != null) previewSlots.Add(slot);
-        }
-
-        bool isOnGrid = (previewSlots.Count > 0);
-        ToggleRealShadows(!isOnGrid);
-
-        for (int i = 0; i < activeShadows.Count; i++)
-        {
-            if (isOnGrid && i < previewSlots.Count)
-            {
-                activeShadows[i].SetActive(true);
-                activeShadows[i].transform.position = new Vector3(
-                    previewSlots[i].transform.position.x, 0.02f,
-                    previewSlots[i].transform.position.z);
-                SetShadowColor(activeShadows[i],
-                    allValid && previewSlots.Count == jellyParts.Length
-                        ? validColor : invalidColor);
-            }
-            else
-            {
-                activeShadows[i].SetActive(false);
-            }
-        }
     }
 
     void HandleDrop()
@@ -197,6 +171,9 @@ public class Draggable : MonoBehaviour
 
         if (allValid)
         {
+            transform.DOKill();
+            transform.localScale = Vector3.one;
+
             Vector3 offset = transform.position - jellyParts[0].position;
             transform.position = new Vector3(
                 foundSlots[0].transform.position.x + offset.x,
@@ -209,36 +186,62 @@ public class Draggable : MonoBehaviour
                 foundSlots[i].occupant = jellyParts[i].gameObject;
             }
 
-            // ← WIN CHECK — shape դրվելուց հետո ստուգում ենք
+            if (AudioManager.Instance != null)
+                AudioManager.Instance.PlayPlace();
+
+            transform.DOPunchScale(Vector3.one * 0.2f, 0.3f, 5, 0.5f);
+
             if (GridManager.Instance != null)
                 GridManager.Instance.CheckWinCondition();
         }
         else
         {
+            if (AudioManager.Instance != null)
+                AudioManager.Instance.PlayPickUp();
+
             transform.position = originalPosition;
             ReoccupySlots();
         }
     }
 
-    void SetShapeTransparency(float alpha)
+    void UpdateShadows()
     {
-        foreach (Renderer rend in partsRenderers)
+        bool allValid = true;
+        GridSlot[] matchedSlots = new GridSlot[jellyParts.Length];
+
+        for (int i = 0; i < jellyParts.Length; i++)
         {
-            if (rend.material.HasProperty("_Color"))
+            GridSlot slot = FindClosestSlot(jellyParts[i].position);
+            if (slot == null || slot.isOccupied)
+                allValid = false;
+
+            for (int j = 0; j < i; j++)
+                if (matchedSlots[j] == slot) { allValid = false; break; }
+
+            matchedSlots[i] = slot;
+        }
+
+        Color shadowColor = allValid ? validColor : invalidColor;
+
+        for (int i = 0; i < activeShadows.Count; i++)
+        {
+            if (matchedSlots[i] != null)
             {
-                Color c = rend.material.color;
-                c.a = alpha;
-                rend.material.color = c;
+                activeShadows[i].SetActive(true);
+                activeShadows[i].transform.position = new Vector3(
+                    matchedSlots[i].transform.position.x, 0.02f,
+                    matchedSlots[i].transform.position.z);
+                SetShadowColor(activeShadows[i], shadowColor);
+            }
+            else
+            {
+                activeShadows[i].SetActive(true);
+                activeShadows[i].transform.position = new Vector3(
+                    jellyParts[i].position.x, 0.02f,
+                    jellyParts[i].position.z);
+                SetShadowColor(activeShadows[i], invalidColor);
             }
         }
-    }
-
-    void ToggleRealShadows(bool enable)
-    {
-        foreach (Renderer rend in partsRenderers)
-            rend.shadowCastingMode = enable
-                ? UnityEngine.Rendering.ShadowCastingMode.On
-                : UnityEngine.Rendering.ShadowCastingMode.Off;
     }
 
     void CreateShadows()
@@ -266,6 +269,19 @@ public class Draggable : MonoBehaviour
         activeShadows.Clear();
     }
 
+    void SetShapeTransparency(float alpha)
+    {
+        foreach (Renderer rend in partsRenderers)
+        {
+            if (rend.material.HasProperty("_Color"))
+            {
+                Color c = rend.material.color;
+                c.a = alpha;
+                rend.material.color = c;
+            }
+        }
+    }
+
     void FreePreviousSlots()
     {
         GridSlot[] allSlots = FindObjectsByType<GridSlot>(FindObjectsSortMode.None);
@@ -289,11 +305,18 @@ public class Draggable : MonoBehaviour
         float closestDistance = float.MaxValue;
         GridSlot bestSlot = null;
 
+        float scaleX = transform.localScale.x;
+        float scaleZ = transform.localScale.z;
+
         foreach (GridSlot slot in allSlots)
         {
+            float adjustedX = transform.position.x + (partPosition.x - transform.position.x) / scaleX;
+            float adjustedZ = transform.position.z + (partPosition.z - transform.position.z) / scaleZ;
+
             float dist = Vector2.Distance(
-                new Vector2(partPosition.x, partPosition.z),
+                new Vector2(adjustedX, adjustedZ),
                 new Vector2(slot.transform.position.x, slot.transform.position.z));
+
             if (dist < 0.7f && dist < closestDistance)
             { closestDistance = dist; bestSlot = slot; }
         }
