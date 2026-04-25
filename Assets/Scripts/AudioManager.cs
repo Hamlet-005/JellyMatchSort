@@ -30,6 +30,7 @@ public class AudioManager : MonoBehaviour
         }
 
         musicSource = gameObject.AddComponent<AudioSource>();
+	musicSource.volume = 0.1f;
         sfxSource = gameObject.AddComponent<AudioSource>();
 
         musicSource.loop = true;
