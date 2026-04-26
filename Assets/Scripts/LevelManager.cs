@@ -129,15 +129,13 @@ public class LevelManager : MonoBehaviour
         if (isGameOver) return;
         isGameOver = true;
 
-        // 1. Ձայն
         if (AudioManager.Instance != null) AudioManager.Instance.PlayWin();
 
-        // 2. Պանել և Թայմեր
         GridManager gm = FindFirstObjectByType<GridManager>();
         if (gm != null)
         {
             if (gm.winPanel != null) gm.winPanel.SetActive(true);
-            if (gm.timerText != null) gm.timerText.gameObject.SetActive(false); // Թայմերը վերանում է
+            if (gm.timerText != null) gm.timerText.gameObject.SetActive(false); 
         }
 
         DisableAllInteractions();
@@ -148,10 +146,8 @@ public class LevelManager : MonoBehaviour
         if (isGameOver) return;
         isGameOver = true;
 
-        // 1. Ձայն
         if (AudioManager.Instance != null) AudioManager.Instance.PlayLose();
 
-        // 2. Պանել և Թայմեր
         GridManager gm = FindFirstObjectByType<GridManager>();
         if (gm != null)
         {
@@ -164,7 +160,6 @@ public class LevelManager : MonoBehaviour
 
     void DisableAllInteractions()
     {
-        // Բոլոր մոդելները դարձնում ենք unclickable
         Drag[] allDraggables = FindObjectsByType<Drag>(FindObjectsSortMode.None);
         foreach (Drag d in allDraggables)
         {

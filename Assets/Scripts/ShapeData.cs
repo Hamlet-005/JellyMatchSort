@@ -2,7 +2,7 @@ using UnityEngine;
 
 public class ShapeData : MonoBehaviour
 {
-    [Header("Grid cells (X=կողք, Y=վեր/վար)")]
+    [Header("Grid cells")]
     public Vector2Int[] cells;
 
     void OnDrawGizmos()

@@ -128,7 +128,6 @@ public class GridManager : MonoBehaviour
         DisableAllDraggables();
 
         Time.timeScale = 0f;
-        Debug.Log("WIN!");
     }
 
     IEnumerator ShowLose()
@@ -143,7 +142,6 @@ public class GridManager : MonoBehaviour
         DisableAllDraggables();
 
         Time.timeScale = 0f;
-        Debug.Log("LOSE!");
     }
 
     void DisableAllDraggables()
@@ -170,6 +168,5 @@ public class GridManager : MonoBehaviour
     public void QuitGame()
     {
         Application.Quit();
-        Debug.Log("Game Exited");
     }
 }

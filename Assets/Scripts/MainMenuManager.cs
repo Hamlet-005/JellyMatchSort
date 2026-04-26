@@ -17,32 +17,26 @@ public class MainMenuManager : MonoBehaviour
         UpdateMusicIcon();
     }
 
-    // Play button
     public void OnPlayPressed()
     {
         SceneManager.LoadScene("Level-1");
     }
 
-    // Quit button
     public void OnQuitPressed()
     {
         Application.Quit();
-        Debug.Log("Quit");
     }
 
-    // Settings button
     public void OnSettingsPressed()
     {
         settingsPanel.SetActive(true);
     }
 
-    // Close settings button
     public void OnCloseSettings()
     {
         settingsPanel.SetActive(false);
     }
 
-    // Music toggle button
     public void OnMusicPressed()
     {
         if (AudioManager.Instance != null)
@@ -54,6 +48,6 @@ public class MainMenuManager : MonoBehaviour
 {
     if (AudioManager.Instance == null) return;
     bool isOn = AudioManager.Instance.IsMusicEnabled();
-    musicOffImage.SetActive(!isOn); // գիծը երևում է միայն երբ անջատված է
+    musicOffImage.SetActive(!isOn); 
 }
 }
