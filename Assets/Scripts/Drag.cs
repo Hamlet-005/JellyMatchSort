@@ -14,13 +14,18 @@ public class Drag : MonoBehaviour
 
     private Transform[] jellyParts;
     private Renderer[] partsRenderers;
-    public Vector3 originalPosition;
+    private Vector3[] localPartPositions;
+    [HideInInspector] public Vector3 originalPosition;
     private bool isDragging = false;
     private Camera mainCamera;
     private List<GameObject> activeShadows = new List<GameObject>();
     private bool isPlacedOnGrid = false;
     private Vector3 dragOffset;
     private int activeTouchId = -1;
+
+    [Header("=== MOBILE SETTINGS ===")]
+    public float liftOffsetY = 1.5f;
+    public float liftOffsetZ = -1.5f;
 
     void Start()
     {
@@ -34,21 +39,26 @@ public class Drag : MonoBehaviour
     public void UpdateOriginalPosition(Vector3 newPos)
     {
         originalPosition = newPos;
-        transform.position = newPos;
     }
 
     void SetupParts()
     {
         List<Transform> partsList = new List<Transform>();
         List<Renderer> rendererList = new List<Renderer>();
+        List<Vector3> localPosList = new List<Vector3>();
+
         MeshRenderer[] renderers = GetComponentsInChildren<MeshRenderer>();
         foreach (MeshRenderer rend in renderers)
         {
             partsList.Add(rend.transform);
             rendererList.Add(rend);
+            localPosList.Add(rend.transform.localPosition);
         }
+
         jellyParts = partsList.ToArray();
         partsRenderers = rendererList.ToArray();
+        localPartPositions = localPosList.ToArray();
+
         foreach (Transform part in jellyParts)
         {
             if (part.GetComponent<Collider>() == null)
@@ -63,8 +73,10 @@ public class Drag : MonoBehaviour
         Bounds bounds = new Bounds(jellyParts[0].localPosition, Vector3.one);
         foreach (Transform part in jellyParts)
             bounds.Encapsulate(new Bounds(part.localPosition, Vector3.one));
+        
         col.center = bounds.center;
-        col.size = bounds.size;
+        // Փոքրացնում ենք քոլայդերը 10%-ով, որ հարևանների հետ կոնֆլիկտ չլինի
+        col.size = bounds.size * 0.9f; 
     }
 
     void Update()
@@ -113,10 +125,9 @@ public class Drag : MonoBehaviour
             if (hit.transform == transform || hit.transform.IsChildOf(transform))
             {
                 Plane movePlane = new Plane(Vector3.up, new Vector3(0, 0.5f, 0));
-                Ray offsetRay = mainCamera.ScreenPointToRay(screenPos);
-                if (movePlane.Raycast(offsetRay, out float dist))
+                if (movePlane.Raycast(ray, out float dist))
                 {
-                    Vector3 clickPoint = offsetRay.GetPoint(dist);
+                    Vector3 clickPoint = ray.GetPoint(dist);
                     dragOffset = transform.position - clickPoint;
                 }
                 StartDrag();
@@ -124,25 +135,18 @@ public class Drag : MonoBehaviour
         }
     }
 
-    void DragTo(Vector3 screenPos)
-    {
-        Plane movePlane = new Plane(Vector3.up, new Vector3(0, 0.5f, 0));
-        Ray ray = mainCamera.ScreenPointToRay(screenPos);
-        if (movePlane.Raycast(ray, out float dist))
-            transform.position = ray.GetPoint(dist) + dragOffset + Vector3.up * 0.5f;
-        UpdateShadows();
-    }
-
     void StartDrag()
     {
         isDragging = true;
+        
         if (isPlacedOnGrid)
         {
             FreePreviousSlots();
             isPlacedOnGrid = false;
             if (LevelManager.Instance != null)
-                LevelManager.Instance.OnModelTakenFromGrid(originalPosition);
+                LevelManager.Instance.OnModelTakenFromGrid(gameObject);
         }
+
         CreateShadows();
         SetShapeTransparency(dragTransparency);
 
@@ -150,7 +154,25 @@ public class Drag : MonoBehaviour
             AudioManager.Instance.PlayPickUp();
 
         transform.DOKill();
-        transform.DOScale(Vector3.one * 1.15f, 0.15f).SetEase(Ease.OutBack);
+        transform.DOScale(Vector3.one, 0.2f).SetEase(Ease.OutBack);
+    }
+
+    void DragTo(Vector3 screenPos)
+    {
+        Plane movePlane = new Plane(Vector3.up, new Vector3(0, 0.5f, 0));
+        Ray ray = mainCamera.ScreenPointToRay(screenPos);
+        if (movePlane.Raycast(ray, out float dist))
+        {
+            Vector3 targetPos = ray.GetPoint(dist) + dragOffset;
+#if !UNITY_EDITOR && !UNITY_STANDALONE
+            targetPos.y += liftOffsetY;
+            targetPos.z += liftOffsetZ;
+#else
+            targetPos.y = 0.5f;
+#endif
+            transform.position = targetPos;
+        }
+        UpdateShadows();
     }
 
     void HandleRelease()
@@ -158,86 +180,60 @@ public class Drag : MonoBehaviour
         isDragging = false;
         DestroyShadows();
         SetShapeTransparency(1.0f);
-
         transform.DOKill();
-        transform.DOScale(Vector3.one, 0.15f).SetEase(Ease.OutBack);
 
-        bool placed = HandleDrop();
+        bool successfullyDropped = HandleDrop();
 
-        if (!placed)
+        if (successfullyDropped)
+        {
+            if (AudioManager.Instance != null)
+                AudioManager.Instance.PlayPlace();
+
+            transform.DOScale(Vector3.one, 0.2f).SetEase(Ease.OutQuad);
+            if (LevelManager.Instance != null)
+                LevelManager.Instance.OnModelPlaced(gameObject);
+        }
+        else
         {
             if (AudioManager.Instance != null)
                 AudioManager.Instance.PlayPickUp();
 
-            transform.position = originalPosition;
-            if (LevelManager.Instance != null)
-                LevelManager.Instance.OnModelReturned(this.gameObject);
+            float targetScale = (LevelManager.Instance != null) ? LevelManager.Instance.waitingZoneScale : 0.7f;
+            
+            Sequence returnSeq = DOTween.Sequence();
+            returnSeq.Join(transform.DOMove(originalPosition, 0.25f).SetEase(Ease.OutCubic));
+            returnSeq.Join(transform.DOScale(Vector3.one * targetScale, 0.25f).SetEase(Ease.OutCubic));
         }
     }
 
     bool HandleDrop()
     {
         GridSlot[] foundSlots = new GridSlot[jellyParts.Length];
-        bool allValid = true;
-
         for (int i = 0; i < jellyParts.Length; i++)
         {
-            GridSlot slot = FindClosestSlot(jellyParts[i].position);
-            if (slot == null || slot.isOccupied) { allValid = false; break; }
-            for (int j = 0; j < i; j++)
-                if (foundSlots[j] == slot) { allValid = false; break; }
-            if (!allValid) break;
+            Vector3 partWorldPos = jellyParts[i].position;
+            GridSlot slot = FindClosestSlot(partWorldPos);
+            
+            if (slot == null || slot.isOccupied) return false;
+            for (int j = 0; j < i; j++) if (foundSlots[j] == slot) return false;
             foundSlots[i] = slot;
         }
 
-        if (allValid && foundSlots.Length == jellyParts.Length)
+        Vector3 offset = transform.position - jellyParts[0].position;
+        transform.position = new Vector3(
+            foundSlots[0].transform.position.x + offset.x,
+            0.5f,
+            foundSlots[0].transform.position.z + offset.z
+        );
+
+        foreach (var slot in foundSlots)
         {
-            transform.DOKill();
-            transform.localScale = Vector3.one;
-
-            Vector3 offset = transform.position - jellyParts[0].position;
-            transform.position = new Vector3(
-                foundSlots[0].transform.position.x + offset.x,
-                0.5f,
-                foundSlots[0].transform.position.z + offset.z
-            );
-
-            for (int i = 0; i < foundSlots.Length; i++)
-            {
-                foundSlots[i].isOccupied = true;
-                foundSlots[i].occupant = gameObject;
-            }
-
-            isPlacedOnGrid = true;
-
-            if (AudioManager.Instance != null)
-                AudioManager.Instance.PlayPlace();
-
-            transform.DOPunchScale(Vector3.one * 0.2f, 0.3f, 5, 0.5f);
-
-            if (LevelManager.Instance != null)
-                LevelManager.Instance.OnModelPlaced(originalPosition, wasOnGrid: false);
-
-            if (GridManager.Instance != null)
-                GridManager.Instance.CheckWinCondition();
-
-            return true;
+            slot.isOccupied = true;
+            slot.occupant = gameObject;
         }
 
-        return false;
-    }
-
-    void CreateShadows()
-    {
-        if (shadowPrefab == null) return;
-        DestroyShadows();
-        foreach (var p in jellyParts)
-        {
-            GameObject shadow = Instantiate(shadowPrefab);
-            shadow.transform.localScale = new Vector3(0.1f, 0.01f, 0.1f);
-            shadow.SetActive(false);
-            activeShadows.Add(shadow);
-        }
+        isPlacedOnGrid = true;
+        return true;
     }
 
     void UpdateShadows()
@@ -247,7 +243,9 @@ public class Drag : MonoBehaviour
 
         for (int i = 0; i < jellyParts.Length; i++)
         {
-            GridSlot slot = FindClosestSlot(jellyParts[i].position);
+            Vector3 partWorldPos = jellyParts[i].position;
+            GridSlot slot = FindClosestSlot(partWorldPos);
+            
             if (slot == null || slot.isOccupied)
                 allValid = false;
 
@@ -261,35 +259,41 @@ public class Drag : MonoBehaviour
 
         for (int i = 0; i < activeShadows.Count; i++)
         {
+            activeShadows[i].SetActive(true);
             if (matchedSlots[i] != null)
             {
-                activeShadows[i].SetActive(true);
-                activeShadows[i].transform.position = new Vector3(
-                    matchedSlots[i].transform.position.x, 0.01f,
-                    matchedSlots[i].transform.position.z);
+                activeShadows[i].transform.position = new Vector3(matchedSlots[i].transform.position.x, 0.05f, matchedSlots[i].transform.position.z);
+                SetShadowColor(activeShadows[i], shadowColor);
             }
             else
             {
-                activeShadows[i].SetActive(true);
-                activeShadows[i].transform.position = new Vector3(
-                    jellyParts[i].position.x, 0.01f,
-                    jellyParts[i].position.z);
-            }
-
-            Renderer r = activeShadows[i].GetComponent<Renderer>();
-            if (r != null)
-            {
-                Color c = shadowColor;
-                c.a = 0.6f;
-                r.material.color = c;
+                activeShadows[i].transform.position = new Vector3(jellyParts[i].position.x, 0.05f, jellyParts[i].position.z);
+                SetShadowColor(activeShadows[i], invalidColor);
             }
         }
     }
 
+    void CreateShadows()
+    {
+        DestroyShadows();
+        if (shadowPrefab == null) return;
+        foreach (var p in jellyParts)
+        {
+            GameObject s = Instantiate(shadowPrefab);
+            s.SetActive(false);
+            activeShadows.Add(s);
+        }
+    }
+
+    void SetShadowColor(GameObject shadow, Color color)
+    {
+        Renderer rend = shadow.GetComponent<Renderer>();
+        if (rend != null) rend.material.color = color;
+    }
+
     void DestroyShadows()
     {
-        foreach (var s in activeShadows)
-            if (s != null) Destroy(s);
+        foreach (var s in activeShadows) if (s != null) Destroy(s);
         activeShadows.Clear();
     }
 
@@ -309,31 +313,26 @@ public class Drag : MonoBehaviour
     void FreePreviousSlots()
     {
         GridSlot[] allSlots = FindObjectsByType<GridSlot>(FindObjectsSortMode.None);
-        foreach (GridSlot slot in allSlots)
-            if (slot.occupant == gameObject) { slot.isOccupied = false; slot.occupant = null; }
+        foreach (var slot in allSlots)
+        {
+            if (slot.occupant == gameObject)
+            {
+                slot.isOccupied = false;
+                slot.occupant = null;
+            }
+        }
     }
 
-    GridSlot FindClosestSlot(Vector3 partPosition)
+    GridSlot FindClosestSlot(Vector3 pos)
     {
         GridSlot[] allSlots = FindObjectsByType<GridSlot>(FindObjectsSortMode.None);
-        float closestDistance = float.MaxValue;
-        GridSlot bestSlot = null;
-
-        float scaleX = transform.localScale.x;
-        float scaleZ = transform.localScale.z;
-
-        foreach (GridSlot slot in allSlots)
+        GridSlot best = null;
+        float close = float.MaxValue;
+        foreach (var s in allSlots)
         {
-            float adjustedX = transform.position.x + (partPosition.x - transform.position.x) / scaleX;
-            float adjustedZ = transform.position.z + (partPosition.z - transform.position.z) / scaleZ;
-
-            float dist = Vector2.Distance(
-                new Vector2(adjustedX, adjustedZ),
-                new Vector2(slot.transform.position.x, slot.transform.position.z));
-
-            if (dist < 0.7f && dist < closestDistance)
-            { closestDistance = dist; bestSlot = slot; }
+            float d = Vector2.Distance(new Vector2(pos.x, pos.z), new Vector2(s.transform.position.x, s.transform.position.z));
+            if (d < 0.75f && d < close) { close = d; best = s; }
         }
-        return bestSlot;
+        return best;
     }
 }

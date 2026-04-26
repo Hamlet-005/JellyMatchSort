@@ -8,105 +8,176 @@ public class LevelManager : MonoBehaviour
 
     public List<GameObject> allModels;
     public Transform[] spawnPoints;
+    public float waitingZoneScale = 0.6f;
 
-    private Queue<GameObject> waitingQueue = new Queue<GameObject>();
-    private Dictionary<Transform, GameObject> activeAtPoint = new Dictionary<Transform, GameObject>();
-
-    private Transform pendingReturnPoint = null;
+    private List<GameObject> activeModels = new List<GameObject>();
+    private List<GameObject> waitingList = new List<GameObject>(); 
+    private bool isGameOver = false;
 
     void Awake() { Instance = this; }
 
     void Start()
     {
-        foreach (var model in allModels)
-            model.SetActive(false);
+        isGameOver = false;
+        activeModels.Clear();
+        waitingList.Clear();
 
-        for (int i = 0; i < allModels.Count; i++)
+        foreach (var model in allModels)
         {
-            if (i < spawnPoints.Length)
-                ShowAtPoint(allModels[i], spawnPoints[i]);
-            else
-                waitingQueue.Enqueue(allModels[i]);
+            model.SetActive(false);
+            waitingList.Add(model);
+        }
+
+        for (int i = 0; i < spawnPoints.Length; i++)
+        {
+            if (waitingList.Count > 0)
+            {
+                GameObject model = waitingList[0];
+                waitingList.RemoveAt(0);
+                activeModels.Add(model);
+                ShowAtPoint(model, spawnPoints[i]);
+            }
         }
     }
 
     void ShowAtPoint(GameObject model, Transform point)
     {
-        model.transform.position = point.position;
         model.SetActive(true);
-        
-        model.transform.DOKill();
+        model.transform.localScale = Vector3.one;
+
+        Bounds combinedBounds = GetMaxBounds(model);
+        Vector3 offset = model.transform.position - combinedBounds.center;
+        model.transform.position = point.position + new Vector3(offset.x, 0, offset.z);
+
         model.transform.localScale = Vector3.zero;
-        model.transform.DOScale(Vector3.one, 0.3f).SetEase(Ease.OutBack);
-
+        model.transform.DOKill();
+        model.transform.DOScale(Vector3.one * waitingZoneScale, 0.35f).SetEase(Ease.OutBack);
+        
         Drag d = model.GetComponent<Drag>();
-        if (d != null) d.UpdateOriginalPosition(point.position);
-        activeAtPoint[point] = model;
+        if (d != null) d.UpdateOriginalPosition(model.transform.position);
     }
 
-    public void OnModelPlaced(Vector3 fromPos, bool wasOnGrid = false)
+    public void OnModelPlaced(GameObject placedModel)
     {
-        Transform point = FindPointAt(fromPos);
-        if (point == null) return;
+        if (isGameOver) return;
 
-        activeAtPoint.Remove(point);
-        pendingReturnPoint = null;
-
-        if (waitingQueue.Count > 0)
+        if (activeModels.Contains(placedModel))
         {
-            GameObject next = waitingQueue.Dequeue();
-            ShowAtPoint(next, point);
-        }
-    }
+            activeModels.Remove(placedModel);
+            ShiftModels();
 
-    public void OnModelTakenFromGrid(Vector3 fromPos)
-    {
-        Transform point = FindPointAt(fromPos);
-        if (point == null) return;
-
-        if (activeAtPoint.ContainsKey(point))
-        {
-            GameObject current = activeAtPoint[point];
-            current.SetActive(false);
-
-            List<GameObject> list = new List<GameObject>(waitingQueue);
-            list.Insert(0, current);
-            waitingQueue = new Queue<GameObject>(list);
-
-            activeAtPoint.Remove(point);
-            pendingReturnPoint = point;
-        }
-    }
-
-    public void OnModelReturned(GameObject returnedModel)
-    {
-        Drag d = returnedModel.GetComponent<Drag>();
-        if (d == null) return;
-
-        Transform point = FindPointAt(d.originalPosition);
-        if (point == null) return;
-
-        if (activeAtPoint.ContainsKey(point))
-        {
-            GameObject current = activeAtPoint[point];
-            if (current != returnedModel)
+            if (waitingList.Count > 0 && activeModels.Count < spawnPoints.Length)
             {
-                current.SetActive(false);
-                List<GameObject> list = new List<GameObject>(waitingQueue);
-                list.Insert(0, current);
-                waitingQueue = new Queue<GameObject>(list);
+                GameObject nextModel = waitingList[0];
+                waitingList.RemoveAt(0);
+                activeModels.Add(nextModel);
+                ShowAtPoint(nextModel, spawnPoints[activeModels.Count - 1]);
+            }
+            CheckWin();
+        }
+    }
+
+    public void OnModelTakenFromGrid(GameObject model)
+    {
+        if (isGameOver) return;
+
+        if (activeModels.Count >= spawnPoints.Length)
+        {
+            GameObject modelToBack = activeModels[activeModels.Count - 1];
+            activeModels.RemoveAt(activeModels.Count - 1);
+            waitingList.Insert(0, modelToBack);
+            modelToBack.transform.DOScale(Vector3.zero, 0.2f).OnComplete(() => modelToBack.SetActive(false));
+        }
+
+        if (!activeModels.Contains(model)) activeModels.Add(model);
+        ShiftModels();
+    }
+
+    void ShiftModels()
+    {
+        for (int i = 0; i < activeModels.Count; i++)
+        {
+            if (i < spawnPoints.Length)
+            {
+                Transform targetPoint = spawnPoints[i];
+                Drag d = activeModels[i].GetComponent<Drag>();
+                if (d != null) d.UpdateOriginalPosition(targetPoint.position);
+
+                if (activeModels[i].activeSelf)
+                {
+                    activeModels[i].transform.DOKill();
+                    activeModels[i].transform.DOMove(targetPoint.position, 0.3f).SetEase(Ease.OutCubic);
+                }
             }
         }
-
-        activeAtPoint[point] = returnedModel;
-        pendingReturnPoint = null;
     }
 
-    Transform FindPointAt(Vector3 pos)
+    void CheckWin()
     {
-        foreach (Transform point in spawnPoints)
-            if (Vector3.Distance(point.position, pos) < 0.5f)
-                return point;
-        return null;
+        GridSlot[] allSlots = FindObjectsByType<GridSlot>(FindObjectsSortMode.None);
+        int occupiedCount = 0;
+        foreach (var slot in allSlots) if (slot.isOccupied) occupiedCount++;
+
+        if (occupiedCount >= allSlots.Length && allSlots.Length > 0)
+        {
+            WinGame();
+        }
+    }
+
+    public void WinGame()
+    {
+        if (isGameOver) return;
+        isGameOver = true;
+
+        // 1. Ձայն
+        if (AudioManager.Instance != null) AudioManager.Instance.PlayWin();
+
+        // 2. Պանել և Թայմեր
+        GridManager gm = FindFirstObjectByType<GridManager>();
+        if (gm != null)
+        {
+            if (gm.winPanel != null) gm.winPanel.SetActive(true);
+            if (gm.timerText != null) gm.timerText.gameObject.SetActive(false); // Թայմերը վերանում է
+        }
+
+        DisableAllInteractions();
+    }
+
+    public void LoseGame()
+    {
+        if (isGameOver) return;
+        isGameOver = true;
+
+        // 1. Ձայն
+        if (AudioManager.Instance != null) AudioManager.Instance.PlayLose();
+
+        // 2. Պանել և Թայմեր
+        GridManager gm = FindFirstObjectByType<GridManager>();
+        if (gm != null)
+        {
+            if (gm.losePanel != null) gm.losePanel.SetActive(true);
+            if (gm.timerText != null) gm.timerText.gameObject.SetActive(false); // Թայմերը վերանում է
+        }
+
+        DisableAllInteractions();
+    }
+
+    void DisableAllInteractions()
+    {
+        // Բոլոր մոդելները դարձնում ենք unclickable
+        Drag[] allDraggables = FindObjectsByType<Drag>(FindObjectsSortMode.None);
+        foreach (Drag d in allDraggables)
+        {
+            d.enabled = false;
+        }
+    }
+
+    Bounds GetMaxBounds(GameObject g)
+    {
+        var renderers = g.GetComponentsInChildren<Renderer>();
+        if (renderers.Length == 0) return new Bounds(g.transform.position, Vector3.zero);
+        Bounds b = renderers[0].bounds;
+        foreach (Renderer r in renderers) b.Encapsulate(r.bounds);
+        return b;
     }
 }
